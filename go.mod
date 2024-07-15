@@ -1,4 +1,4 @@
-module example/user/tuition
+module buurro/tuition
 
 go 1.22.4
 

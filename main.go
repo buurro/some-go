@@ -1,74 +1,58 @@
 package main
 
 import (
-	"encoding/json"
+	"buurro/tuition/audio"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
+var docStyle = lipgloss.NewStyle().Margin(1, 2)
+
+type item struct {
+	title, desc string
+}
+
+func (i item) Title() string       { return i.title }
+func (i item) Description() string { return i.desc }
+func (i item) FilterValue() string { return i.title }
+
 type sessionState int
 
 const (
-	entryView       sessionState = iota
-	audioView       sessionState = iota
-	audioInputView  sessionState = iota
-	audioOutputView sessionState = iota
+	entryView sessionState = iota
+	audioView sessionState = iota
 )
 
 type MainModel struct {
 	state sessionState
-	entry tea.Model
-}
-
-var docStyle = lipgloss.NewStyle().Margin(1, 2)
-
-// item
-type item struct {
-	title, desc string
-	targetState sessionState
-}
-
-func (i item) Title() string             { return i.title }
-func (i item) Description() string       { return i.desc }
-func (i item) FilterValue() string       { return i.title }
-func (i item) TargetState() sessionState { return i.targetState }
-
-// model
-type model struct {
 	list  list.Model
-	state sessionState
-	items map[sessionState][]list.Item
+
+	audio audio.AudioModel
 }
 
-func (m model) Init() tea.Cmd {
+func (m MainModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m model) TargetState(item list.Item) sessionState {
-
-	for _, i := range m.items[m.state] {
-		if i.FilterValue() == item.FilterValue() {
-			return audioInputView
-		}
+func (m MainModel) View() string {
+	switch m.state {
+	case entryView:
+		return docStyle.Render(m.list.View())
+	case audioView:
+		return m.audio.View()
 	}
-	return entryView
+	return ""
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
-		}
-		if msg.String() == "enter" {
-			m.state = audioView
-			m.list.SetItems(m.items[m.state])
 		}
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
@@ -76,73 +60,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	switch m.state {
+	case entryView:
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			if msg.String() == "enter" {
+				current := m.list.SelectedItem().FilterValue()
+				if current == "Audio" {
+					m.audio = audio.AudioModel{}
+					m.state = audioView
+					return m, m.audio.Init()
+				}
+			}
+		}
+		m.list, cmd = m.list.Update(msg)
+	case audioView:
+		m.audio, cmd = m.audio.Update(msg)
+	}
+
 	return m, cmd
 }
 
-func (m model) View() string {
-	return docStyle.Render(m.list.View())
-}
-
-// node
-type node struct {
-	Id   int32
-	Type string
-	Info struct {
-		Props struct {
-			Node_nick   string `json:"node.nick"`
-			Media_class string `json:"media.class"`
-		}
-	}
-}
-
 func main() {
-	out, err := exec.Command("pw-dump").Output()
-	if err != nil {
-		log.Fatal(err)
-	}
-	var nodes []node
-
-	err = json.Unmarshal(out, &nodes)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var items = make(map[sessionState][]list.Item)
-
-	items[entryView] = []list.Item{
-		item{title: "Audio", desc: "System audio", targetState: audioView},
+	items := []list.Item{
+		item{title: "Audio", desc: "System audio"},
 		item{title: "Bluetooth", desc: "Bluetooth devices and settings"},
 	}
+	list := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	list.Title = "ayo"
 
-	items[audioView] = []list.Item{
-		item{title: "Volume", desc: "System and playback volume"},
-		item{title: "Output", desc: "Output Devices", targetState: audioOutputView},
-		item{title: "Input", desc: "Input Devices", targetState: audioInputView},
-	}
-
-	items[audioInputView] = []list.Item{}
-	items[audioOutputView] = []list.Item{}
-
-	for _, node := range nodes {
-		if node.Type == "PipeWire:Interface:Node" {
-			item := item{
-				title: node.Info.Props.Node_nick,
-				desc:  node.Info.Props.Media_class,
-			}
-			if node.Info.Props.Media_class == "Audio/Source" {
-				items[audioInputView] = append(items[audioInputView], item)
-			}
-			if node.Info.Props.Media_class == "Audio/Sink" {
-				items[audioOutputView] = append(items[audioOutputView], item)
-			}
-		}
-	}
-
-	m := model{items: items}
-
-	m.list = list.New(m.items[m.state], list.NewDefaultDelegate(), 0, 0)
-	m.list.Title = "Audio"
+	m := MainModel{state: entryView, list: list}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
